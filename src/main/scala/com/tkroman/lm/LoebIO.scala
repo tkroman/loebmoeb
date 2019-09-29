@@ -35,7 +35,9 @@ object LoebIO {
     f.map(fn => fn.fmap(x => loeb(f).flatMap(l => x(IO.pure(l)))))
   }
 
-  def moeb[A, B, C](f: ((A => IO[B]) => IO[B]) => C => IO[A])(c: IO[C]): IO[A] = {
+  def moeb[A, B, C](
+      f: ((A => IO[B]) => IO[B]) => C => IO[A]
+  )(c: IO[C]): IO[A] = {
     c.flatMap { _c =>
       f(g => moeb(f)(c).flatMap(a => g(a)))(_c)
     }
@@ -46,10 +48,17 @@ object LoebIO {
   // note that this may also be done by simply saying
   // "let's substitute each type A with IO[A] now'
   // and then fucking around until it compiles
-  def loebAsMoeb[F[_], A](fa: IO[F[IO[F[IO[A]]] => IO[A]]])(implicit F: Functor[F]): IO[F[IO[A]]] = {
-    moeb[F[IO[A]], A, F[IO[F[IO[A]]] => IO[A]]](
-      f => fs => IO(F.fmap(fs)(fn => f(_f => fn(IO(_f)))))
-    )(fa)
+  def loeb2[F[_], A](
+      fa: IO[F[IO[F[IO[A]]] => IO[A]]]
+  )(implicit F: Functor[F]): IO[F[IO[A]]] = {
+    def fmap(
+        f: (F[IO[A]] => IO[A]) => IO[A],
+        fs: F[IO[F[IO[A]]] => IO[A]]
+    ): F[IO[A]] = {
+      F.fmap(fs)(fn => f(_f => fn(IO(_f))))
+    }
+
+    moeb[F[IO[A]], A, F[IO[F[IO[A]]] => IO[A]]](f => fs => IO(fmap(f, fs)))(fa)
   }
 
   def liftSemigroup[F[_]: Apply, A: Semigroup]: Semigroup[F[A]] =
@@ -76,6 +85,41 @@ object LoebIO {
       )
     )
     println(loeb[List, Int](xs).flatMap(_.traverse(identity)).unsafeRunSync())
-    println(loebAsMoeb[List, Int](xs).flatMap(_.traverse(identity)).unsafeRunSync())
+    println(loeb2[List, Int](xs).flatMap(_.traverse(identity)).unsafeRunSync())
+  }
+}
+
+object MakingMoreSenseOfTypes {
+  // making more (?, probably not) sense of types
+  class L[F[_]: Functor, A] {
+    val F: Functor[F] = Functor[F]
+    type a = IO[A]
+    type f[x] = IO[F[x]]
+
+    def loeb(f: f[f[a] => a]): f[a] = {
+      f.map(fn => fn.fmap(x => loeb(f).flatMap(l => x(IO.pure(l)))))
+    }
+  }
+
+  class M[A, B, C] {
+    type a = IO[A]
+    type b = IO[B]
+    type c = IO[C]
+    def moeb(f: ((A => b) => b) => C => a)(c: c): a = {
+      c.flatMap(_c => f(g => moeb(f)(c).flatMap(a => g(a)))(_c))
+    }
+  }
+
+  class LM[F[_]: Functor, A] {
+    val F: Functor[F] = Functor[F]
+    type a = IO[A]
+    type f[x] = IO[F[x]]
+
+    def loebAsMoeb(fa: f[f[a] => a])(implicit F: Functor[F]): f[a] = {
+      def fmap(f: (F[a] => a) => a, fs: F[f[a] => a]): F[a] =
+        F.fmap(fs)(fn => f(_f => fn(IO(_f))))
+
+      new M[F[a], A, F[f[a] => a]].moeb(f => fs => IO(fmap(f, fs)))(fa)
+    }
   }
 }
